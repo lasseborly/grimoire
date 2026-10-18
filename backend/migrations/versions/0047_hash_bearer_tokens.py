@@ -101,19 +101,9 @@ def _convert(bind, token_vault) -> None:
 
     if converted and bind.dialect.name == "sqlite":
         bind.execute(
-            text(
-                "UPDATE app_settings SET value = '1' WHERE key = :k"
-            ),
+            text("INSERT OR REPLACE INTO app_settings (key, value) VALUES (:k, '1')"),
             {"k": "db_compact_pending"},
         )
-        if not bind.execute(
-            text("SELECT 1 FROM app_settings WHERE key = :k"),
-            {"k": "db_compact_pending"},
-        ).first():
-            bind.execute(
-                text("INSERT INTO app_settings (key, value) VALUES (:k, '1')"),
-                {"k": "db_compact_pending"},
-            )
 
 
 def downgrade() -> None:

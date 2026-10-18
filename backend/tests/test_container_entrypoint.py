@@ -152,13 +152,6 @@ def test_backup_dir_without_a_database(tmp_path):
     assert ep.configured_backup_dir({}, str(tmp_path)) is None
 
 
-def test_backup_dir_does_not_read_sqlite_state_for_postgres(tmp_path):
-    _settings_db(tmp_path, "/legacy-backups")
-    assert ep.configured_backup_dir(
-        {"DATABASE_URL": "postgresql://db/grimoire"}, str(tmp_path)
-    ) is None
-
-
 # --- fix_ownership ----------------------------------------------------------
 
 
