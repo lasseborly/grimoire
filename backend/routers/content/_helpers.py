@@ -74,15 +74,34 @@ def search_entry_ids(db: Session, schema_id: str, content_type: str, query: str)
         return []
     match = " ".join(f'"{term}"*' for term in terms)
 
-    rows = db.execute(
-        text(
-            "SELECT entry_row FROM content_search "
-            "WHERE content_search MATCH :match "
-            "AND schema_id = :schema_id AND content_type = :content_type "
-            "ORDER BY rank"
-        ),
-        {"match": match, "schema_id": schema_id, "content_type": content_type},
-    ).fetchall()
+    if db.get_bind().dialect.name == "postgresql":
+        pg_terms = [
+            term
+            for term in re.findall(r"[\w]+", query, flags=re.UNICODE)
+            if term.upper() not in {"AND", "OR", "NOT", "NEAR"}
+        ]
+        if not pg_terms:
+            return []
+        match = " & ".join(f"{term}:*" for term in pg_terms)
+        rows = db.execute(
+            text(
+                "SELECT entry_row FROM content_search "
+                "WHERE search_vector @@ to_tsquery('simple', :match) "
+                "AND schema_id = :schema_id AND content_type = :content_type "
+                "ORDER BY ts_rank_cd(search_vector, to_tsquery('simple', :match)) DESC"
+            ),
+            {"match": match, "schema_id": schema_id, "content_type": content_type},
+        ).fetchall()
+    else:
+        rows = db.execute(
+            text(
+                "SELECT entry_row FROM content_search "
+                "WHERE content_search MATCH :match "
+                "AND schema_id = :schema_id AND content_type = :content_type "
+                "ORDER BY rank"
+            ),
+            {"match": match, "schema_id": schema_id, "content_type": content_type},
+        ).fetchall()
     return [row[0] for row in rows]
 
 

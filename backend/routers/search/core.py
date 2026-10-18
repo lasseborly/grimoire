@@ -13,7 +13,6 @@ from ._books import search_book_metadata
 from ...services.search_query import FIELD_ALIASES, parse_query
 from ._helpers import (
     _search_models,
-    SNIPPET_SQL,
     access_clause,
     VISIBLE_BOOKS_SQL,
     _CATEGORY_PRIORITY,
@@ -21,6 +20,7 @@ from ._helpers import (
     _search_maps,
     _search_tokens,
     escape_snippet,
+    full_text_search_parts,
 )
 
 
@@ -53,61 +53,62 @@ def search_library(
     # global search box.
     parsed = parse_query(q)
     content_q = parsed.content_query
+    search = full_text_search_parts(db, content_q) if content_q else {}
 
     rows = []
-    if content_q:
+    if content_q and search["query"]:
         if book_id:
             sql = text(
                 f"""
                 SELECT book_id, page_number,
-                       {SNIPPET_SQL} as snippet,
-                       rank
+                       {search['snippet']} as snippet,
+                       {search['rank']} as rank
                 FROM book_search
-                WHERE content MATCH :query AND book_id = :book_id
+                WHERE {search['match']} AND book_id = :book_id
                   {access_sql}
-                ORDER BY rank
+                ORDER BY {search['order']}
                 LIMIT :limit
             """
             )
             rows = db.execute(
-                sql, {"query": content_q, "book_id": book_id, "limit": limit, **access_params}
+                sql, {"query": search["query"], "book_id": book_id, "limit": limit, **access_params}
             ).fetchall()
         elif system_id:
             sql = text(
                 f"""
                 SELECT book_id, page_number,
-                       {SNIPPET_SQL} as snippet,
-                       rank
+                       {search['snippet']} as snippet,
+                       {search['rank']} as rank
                 FROM book_search
-                WHERE content MATCH :query
+                WHERE {search['match']}
                   AND book_id IN (
                       SELECT id FROM books
                       WHERE game_system_id = :system_id AND variant_parent_id IS NULL
                   )
                   {access_sql}
-                ORDER BY rank
+                ORDER BY {search['order']}
                 LIMIT :limit
             """
             )
             rows = db.execute(
-                sql, {"query": content_q, "system_id": system_id, "limit": limit, **access_params}
+                sql, {"query": search["query"], "system_id": system_id, "limit": limit, **access_params}
             ).fetchall()
         else:
             sql = text(
                 f"""
                 SELECT book_id, page_number,
-                       {SNIPPET_SQL} as snippet,
-                       rank
+                       {search['snippet']} as snippet,
+                       {search['rank']} as rank
                 FROM book_search
-                WHERE content MATCH :query
+                WHERE {search['match']}
                   AND {VISIBLE_BOOKS_SQL}
                   {access_sql}
-                ORDER BY rank
+                ORDER BY {search['order']}
                 LIMIT :limit
             """
             )
             rows = db.execute(
-                sql, {"query": content_q, "limit": limit, **access_params}
+                sql, {"query": search["query"], "limit": limit, **access_params}
             ).fetchall()
 
     enriched = []

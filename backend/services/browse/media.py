@@ -54,8 +54,8 @@ class MediaBrowse:
 
 
 def rowid(model: Any) -> Any:
-    """``model``'s SQLite rowid, the implicit last column of every index."""
-    return literal_column(f"{model.__tablename__}.rowid")
+    """Stable unique tie-breaker for the collection's natural sort."""
+    return model.id
 
 
 class MediaBrowser:

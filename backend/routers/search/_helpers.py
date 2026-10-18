@@ -1,5 +1,6 @@
 """Shared search helpers and category prioritization for the search router."""
 from html import escape
+import re
 from typing import Optional
 
 from sqlalchemy import String, cast, or_
@@ -91,6 +92,38 @@ def access_clause(excluded_book_ids) -> tuple[str, dict]:
 
 
 SNIPPET_SQL = f"snippet(book_search, 2, '{_SNIPPET_OPEN}', '{_SNIPPET_CLOSE}', '...', 40)"
+
+
+def full_text_search_parts(db, query: str) -> dict[str, str]:
+    """Return the dialect-specific predicate, snippet, rank, and search value."""
+    if db.get_bind().dialect.name == "postgresql":
+        # Terms are extracted rather than interpolated into PostgreSQL's tsquery
+        # grammar. Prefix matching mirrors the common FTS5 search behavior.
+        terms = [
+            term
+            for term in re.findall(r"[\w]+", query, flags=re.UNICODE)
+            if term.upper() not in {"AND", "OR", "NOT", "NEAR"}
+        ]
+        search_value = " & ".join(f"{term}:*" for term in terms)
+        tsquery = "to_tsquery('simple', :query)"
+        return {
+            "query": search_value,
+            "match": f"search_vector @@ {tsquery}",
+            "rank": f"-ts_rank_cd(search_vector, {tsquery})",
+            "order": "rank",
+            "snippet": (
+                "ts_headline('simple', content, "
+                f"{tsquery}, 'StartSel={_SNIPPET_OPEN}, StopSel={_SNIPPET_CLOSE}, "
+                "MaxWords=40, MinWords=15')"
+            ),
+        }
+    return {
+        "query": query,
+        "match": "content MATCH :query",
+        "rank": "rank",
+        "order": "rank",
+        "snippet": SNIPPET_SQL,
+    }
 
 
 def escape_snippet(raw: str) -> str:

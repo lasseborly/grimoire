@@ -45,6 +45,7 @@ def upgrade() -> None:
             ["calendar_token"],
             unique=True,
             sqlite_where=sa.text("calendar_token IS NOT NULL"),
+            postgresql_where=sa.text("calendar_token IS NOT NULL"),
         )
 
 

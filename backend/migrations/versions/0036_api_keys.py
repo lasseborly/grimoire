@@ -70,7 +70,7 @@ def upgrade() -> None:
         op.add_column(
             "users",
             sa.Column(
-                "api_keys_enabled", sa.Boolean(), nullable=True, server_default=sa.text("0")
+                "api_keys_enabled", sa.Boolean(), nullable=True, server_default=sa.false()
             ),
         )
 

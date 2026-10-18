@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import zoneinfo
+from sqlalchemy import MetaData, Table, select
 from typing import Any, Iterator, Tuple
 
 from sqlalchemy import create_engine, event, inspect, text
@@ -50,10 +51,14 @@ def _normalize_tags_in_db(conn: Connection) -> None:
             continue
         if "tags" not in {c["name"] for c in inspector.get_columns(table)}:
             continue
+        reflected = Table(table, MetaData(), autoload_with=conn)
+        primary_key = next(iter(reflected.primary_key.columns), None)
+        if primary_key is None:
+            continue
         rows = conn.execute(
-            text(f"SELECT rowid, tags FROM {table} WHERE tags IS NOT NULL")
+            select(primary_key, reflected.c.tags).where(reflected.c.tags.is_not(None))
         ).fetchall()
-        for rowid, raw in rows:
+        for row_id, raw in rows:
             try:
                 tags = json.loads(raw) if isinstance(raw, str) else raw
                 if not isinstance(tags, list):
@@ -67,15 +72,16 @@ def _normalize_tags_in_db(conn: Connection) -> None:
                         normalized.append(lowered)
                 if normalized != tags:
                     conn.execute(
-                        text(f"UPDATE {table} SET tags = :tags WHERE rowid = :rowid"),
-                        {"tags": json.dumps(normalized), "rowid": rowid},
+                        reflected.update()
+                        .where(primary_key == row_id)
+                        .values(tags=normalized)
                     )
             except (ValueError, TypeError) as e:
                 # Row holds tags that aren't valid JSON / not a list-of-strings;
                 # skip it rather than aborting the whole normalization pass, but
                 # log it so a corrupt row is visible instead of silently ignored.
                 logger.warning(
-                    "Skipping tag normalization for %s rowid=%s: %s", table, rowid, e
+                    "Skipping tag normalization for %s row=%s: %s", table, row_id, e
                 )
     conn.commit()
 
@@ -107,6 +113,7 @@ def _migrate_schedule_times_to_local(conn: Connection) -> None:
     if not inspector.has_table("campaign_schedules"):
         return
 
+    schedule_table = Table("campaign_schedules", MetaData(), autoload_with=conn)
     rows = conn.execute(
         text("SELECT id, definition FROM campaign_schedules WHERE definition IS NOT NULL")
     ).fetchall()
@@ -145,10 +152,9 @@ def _migrate_schedule_times_to_local(conn: Connection) -> None:
                     if repaired != stale:
                         definition["time_local"] = repaired
                         conn.execute(
-                            text(
-                                "UPDATE campaign_schedules SET definition = :d WHERE id = :i"
-                            ),
-                            {"d": json.dumps(definition), "i": row_id},
+                            schedule_table.update()
+                            .where(schedule_table.c.id == row_id)
+                            .values(definition=definition)
                         )
                         logger.info(
                             "Repaired schedule id=%s: time_local %s -> %s",
@@ -202,8 +208,9 @@ def _migrate_schedule_times_to_local(conn: Connection) -> None:
                 definition.pop("time_utc", None)
 
             conn.execute(
-                text("UPDATE campaign_schedules SET definition = :d WHERE id = :i"),
-                {"d": json.dumps(definition), "i": row_id},
+                schedule_table.update()
+                .where(schedule_table.c.id == row_id)
+                .values(definition=definition)
             )
         except (ValueError, TypeError) as e:
             # A row whose definition isn't the expected shape: skip it rather
@@ -459,6 +466,10 @@ def _apply_migrations(engine: Engine) -> None:
     is_pre_alembic = not has_version_table and bool(app_tables)
 
     if is_pre_alembic:
+        if engine.dialect.name != "sqlite":
+            raise RuntimeError(
+                "Pre-Alembic database upgrades are supported only for SQLite."
+            )
         logger.info("Existing pre-Alembic database detected - cutting over to Alembic.")
         # Create any tables missing from the old DB, then replay the legacy
         # column/index migrations so the schema exactly matches the baseline
@@ -530,6 +541,8 @@ def _compact_if_pending(engine: Engine) -> None:
     now (another worker reading, too little disk for the temporary copy) it is
     logged and retried at the next start - the data itself is already migrated.
     """
+    if engine.dialect.name != "sqlite":
+        return
     with engine.connect() as conn:
         pending = conn.execute(
             text("SELECT 1 FROM app_settings WHERE key = :k"), {"k": COMPACT_PENDING_KEY}
@@ -581,19 +594,40 @@ def _post_migration_setup(engine: Engine) -> None:
             conn.rollback()
             logger.warning("Resource visibility backfill skipped: %s", e)
 
-        conn.execute(
-            text(
-                """
-            CREATE VIRTUAL TABLE IF NOT EXISTS book_search
-            USING fts5(
-                book_id UNINDEXED,
-                page_number UNINDEXED,
-                content,
-                tokenize='porter unicode61'
+        if conn.dialect.name == "sqlite":
+            conn.execute(
+                text(
+                    """
+                CREATE VIRTUAL TABLE IF NOT EXISTS book_search
+                USING fts5(
+                    book_id UNINDEXED,
+                    page_number UNINDEXED,
+                    content,
+                    tokenize='porter unicode61'
+                )
+            """
+                )
             )
-        """
+        elif conn.dialect.name == "postgresql":
+            conn.execute(
+                text(
+                    """
+                CREATE TABLE IF NOT EXISTS book_search (
+                    book_id VARCHAR(36) NOT NULL,
+                    page_number INTEGER NOT NULL,
+                    content TEXT NOT NULL,
+                    search_vector TSVECTOR GENERATED ALWAYS AS
+                        (to_tsvector('simple', coalesce(content, ''))) STORED
+                )
+            """
+                )
             )
-        )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_book_search_vector "
+                    "ON book_search USING GIN (search_vector)"
+                )
+            )
         conn.commit()
 
 
@@ -630,20 +664,29 @@ def _migration_lock(db_path: str) -> Iterator[None]:
             lock_file.close()
 
 
-def init_db(db_path: str) -> Tuple[Engine, sessionmaker[Session]]:
+def init_db(database_url: str) -> Tuple[Engine, sessionmaker[Session]]:
     """Initialize database and return engine + session factory.
 
     Applies Alembic migrations (with the pre-Alembic cutover handled by
-    ``_apply_migrations``), then runs idempotent data fixups and FTS5 setup.
-    """
-    engine = create_engine(
-        f"sqlite:///{db_path}",
-        echo=False,
-        connect_args={"timeout": 30, "check_same_thread": False},
-    )
+    ``_apply_migrations``), then runs idempotent data fixups and search setup.
 
-    @event.listens_for(engine, "connect")
-    def set_sqlite_pragma(dbapi_connection: Any, connection_record: Any) -> None:
+    Plain filesystem paths remain accepted for tests and maintenance scripts;
+    runtime configuration passes a SQLAlchemy URL.
+    """
+    if "://" not in database_url:
+        database_url = f"sqlite:///{database_url}"
+    elif database_url.startswith(("postgres://", "postgresql://")):
+        database_url = database_url.replace("postgres://", "postgresql+psycopg://", 1)
+        database_url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
+
+    engine_options: dict[str, Any] = {"echo": False}
+    if database_url.startswith("sqlite"):
+        engine_options["connect_args"] = {"timeout": 30, "check_same_thread": False}
+    engine = create_engine(database_url, **engine_options)
+
+    if engine.dialect.name == "sqlite":
+        @event.listens_for(engine, "connect")
+        def set_sqlite_pragma(dbapi_connection: Any, connection_record: Any) -> None:
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA foreign_keys=ON")
@@ -652,12 +695,25 @@ def init_db(db_path: str) -> Tuple[Engine, sessionmaker[Session]]:
 
     # Serialize migrations across workers: init_db runs once per process (at
     # config import), so with multiple uvicorn workers several may reach this
-    # concurrently. A blocking file lock keyed on the DB lets the first worker
-    # migrate while the others wait, then find the DB already at head.
-    with _migration_lock(db_path):
+    # concurrently. SQLite uses a local lock file; PostgreSQL uses an advisory
+    # lock so replicas sharing the database cannot migrate concurrently.
+    if engine.dialect.name == "sqlite":
+        with _migration_lock(engine.url.database or ""):
         _apply_migrations(engine)
         _post_migration_setup(engine)
         _compact_if_pending(engine)
+    elif engine.dialect.name == "postgresql":
+        with engine.connect() as conn:
+        conn.execute(text("SELECT pg_advisory_lock(7384619201342)"))
+        try:
+            _apply_migrations(engine)
+            _post_migration_setup(engine)
+        finally:
+            conn.execute(text("SELECT pg_advisory_unlock(7384619201342)"))
+    else:
+        raise ValueError(
+        f"Unsupported database dialect {engine.dialect.name!r}; use SQLite or PostgreSQL."
+        )
 
     Session = sessionmaker(bind=engine)
     return engine, Session

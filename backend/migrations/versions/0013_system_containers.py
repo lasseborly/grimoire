@@ -79,7 +79,7 @@ def upgrade() -> None:
                 "name_is_custom",
                 sa.Boolean(),
                 nullable=True,
-                server_default=sa.text("0"),
+                server_default=sa.false(),
             ),
         )
     if not _has_index(_TABLE, _INDEX):

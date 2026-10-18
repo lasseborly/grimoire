@@ -53,7 +53,7 @@ def upgrade() -> None:
     if "ocr_pending" not in existing:
         op.add_column(
             "books",
-            sa.Column("ocr_pending", sa.Boolean(), nullable=True, server_default=sa.text("0")),
+            sa.Column("ocr_pending", sa.Boolean(), nullable=True, server_default=sa.false()),
         )
     if "ocr_pages_done" not in existing:
         op.add_column(

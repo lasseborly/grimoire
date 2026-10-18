@@ -68,7 +68,7 @@ def upgrade() -> None:
     _add("game_systems", sa.Column("character_builder_urls", sa.JSON(), nullable=True))
     _add(
         "game_systems",
-        sa.Column("is_one_page", sa.Boolean(), nullable=True, server_default=sa.text("0")),
+        sa.Column("is_one_page", sa.Boolean(), nullable=True, server_default=sa.false()),
     )
 
     # --- books columns ---

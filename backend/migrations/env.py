@@ -12,6 +12,7 @@ from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
+from sqlalchemy.engine import make_url
 
 from backend.models.base import Base
 
@@ -39,7 +40,7 @@ def _get_url() -> str:
     """DB URL for standalone CLI runs; falls back to the app's configured path.
 
     Precedence: ``-x url=...`` CLI override, then the ini's ``sqlalchemy.url``,
-    then the app's configured ``DB_PATH``.
+    then the app's configured ``DATABASE_URL``.
     """
     x_args = context.get_x_argument(as_dictionary=True)
     if x_args.get("url"):
@@ -47,19 +48,20 @@ def _get_url() -> str:
     url = config.get_main_option("sqlalchemy.url")
     if url:
         return url
-    from backend.config import DB_PATH
+    from backend.config import DATABASE_URL
 
-    return f"sqlite:///{DB_PATH}"
+    return DATABASE_URL
 
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode (emit SQL to stdout, no DB connection)."""
+    url = _get_url()
     context.configure(
-        url=_get_url(),
+        url=url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
-        render_as_batch=True,
+        render_as_batch=make_url(url).get_backend_name() == "sqlite",
         compare_type=True,
     )
     with context.begin_transaction():
@@ -70,7 +72,7 @@ def _run_with_connection(connection) -> None:
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
-        render_as_batch=True,
+        render_as_batch=connection.dialect.name == "sqlite",
         compare_type=True,
     )
     with context.begin_transaction():

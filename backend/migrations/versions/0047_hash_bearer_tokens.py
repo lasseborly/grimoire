@@ -61,12 +61,15 @@ def upgrade() -> None:
     from backend import token_vault
 
     bind = op.get_bind()
-    previous = bind.execute(text("PRAGMA secure_delete")).scalar()
-    op.execute("PRAGMA secure_delete = ON")
+    previous = None
+    if bind.dialect.name == "sqlite":
+        previous = bind.execute(text("PRAGMA secure_delete")).scalar()
+        op.execute("PRAGMA secure_delete = ON")
     try:
         _convert(bind, token_vault)
     finally:
-        op.execute(f"PRAGMA secure_delete = {int(previous or 0)}")
+        if bind.dialect.name == "sqlite":
+            op.execute(f"PRAGMA secure_delete = {int(previous or 0)}")
 
 
 def _convert(bind, token_vault) -> None:
@@ -98,9 +101,19 @@ def _convert(bind, token_vault) -> None:
 
     if converted:
         bind.execute(
-            text("INSERT OR REPLACE INTO app_settings (key, value) VALUES (:k, '1')"),
+            text(
+                "UPDATE app_settings SET value = '1' WHERE key = :k"
+            ),
             {"k": "db_compact_pending"},
         )
+        if not bind.execute(
+            text("SELECT 1 FROM app_settings WHERE key = :k"),
+            {"k": "db_compact_pending"},
+        ).first():
+            bind.execute(
+                text("INSERT INTO app_settings (key, value) VALUES (:k, '1')"),
+                {"k": "db_compact_pending"},
+            )
 
 
 def downgrade() -> None:

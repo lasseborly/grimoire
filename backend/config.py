@@ -78,6 +78,9 @@ DATA_PATH = os.environ.get("DATA_PATH", "./data")
 DB_PATH = os.path.join(DATA_PATH, "grimoire.db")
 # SQLite remains the default; hosted deployments can provide a PostgreSQL URL.
 DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{DB_PATH}")
+if DATABASE_URL.startswith(("postgres://", "postgresql://")):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://", 1)
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
 THUMB_DIR = os.path.join(DATA_PATH, "thumbnails")
 PAGE_CACHE_DIR = os.path.join(DATA_PATH, "page_cache")
 CAMPAIGN_UPLOAD_DIR = os.path.join(DATA_PATH, "campaign_uploads")

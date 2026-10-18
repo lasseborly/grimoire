@@ -154,26 +154,49 @@ def upgrade() -> None:
             "ix_content_entries_lookup", "content_entries", ["schema_id", "content_type"]
         )
 
-    # FTS5 over the searchable text of every entry, mirroring `book_search`.
-    # `entry_row` is the content_entries.id, so a hit maps straight back;
-    # `pack_row` is the owning pack, which is what a reload clears by — entries
-    # are replaced wholesale, so their ids change and cannot key the cleanup.
-    bind.execute(
-        text(
-            """
-            CREATE VIRTUAL TABLE IF NOT EXISTS content_search
-            USING fts5(
-                entry_row UNINDEXED,
-                pack_row UNINDEXED,
-                schema_id UNINDEXED,
-                content_type UNINDEXED,
-                name,
-                body,
-                tokenize='porter unicode61'
+    # `entry_row` maps a hit to its entry; `pack_row` lets a reload clear the
+    # pack's index rows. SQLite uses FTS5; PostgreSQL uses a generated tsvector.
+    if bind.dialect.name == "sqlite":
+        bind.execute(
+            text(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS content_search
+                USING fts5(
+                    entry_row UNINDEXED,
+                    pack_row UNINDEXED,
+                    schema_id UNINDEXED,
+                    content_type UNINDEXED,
+                    name,
+                    body,
+                    tokenize='porter unicode61'
+                )
+                """
             )
-            """
         )
-    )
+    elif bind.dialect.name == "postgresql":
+        bind.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS content_search (
+                    entry_row VARCHAR(36) NOT NULL,
+                    pack_row VARCHAR(36) NOT NULL,
+                    schema_id VARCHAR(100) NOT NULL,
+                    content_type VARCHAR(100) NOT NULL,
+                    name TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    search_vector TSVECTOR GENERATED ALWAYS AS
+                        (to_tsvector('simple', coalesce(name, '') || ' ' || coalesce(body, '')))
+                        STORED
+                )
+                """
+            )
+        )
+        bind.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_content_search_vector "
+                "ON content_search USING GIN (search_vector)"
+            )
+        )
 
     if not insp.has_table("rulesets"):
         op.create_table(

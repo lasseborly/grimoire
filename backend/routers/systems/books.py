@@ -25,7 +25,8 @@ from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
 from fastapi import Depends, HTTPException, Query
-from sqlalchemy import exists, func, literal_column, nullslast, or_, select
+from sqlalchemy import cast, exists, func, literal_column, nullslast, or_, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
 from ...auth import CurrentUser, get_current_user
@@ -164,6 +165,8 @@ class ShelfBrowser:
             return empty
         if genre == FILTER_ANY:
             return ~empty
+        if self.db.get_bind().dialect.name == "postgresql":
+            return cast(Book.genres, JSONB).contains([genre.strip()])
         entries = func.json_each(Book.genres).table_valued("value")
         return exists(
             select(literal_column("1"))
@@ -439,4 +442,3 @@ def list_system_book_facets(
     """The values the shelf's filter menus offer, over every visible book."""
     system = _load_system(db, system_id, current_user)
     return ShelfBrowser(db, system, current_user).facets()
-
