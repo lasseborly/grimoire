@@ -6,7 +6,7 @@ the notable constraints. The schema is defined by the SQLAlchemy models in
 `campaigns.py`, `settings.py`, `api_keys.py`, …); this document is a companion reference, so **keep it in
 sync when you change a model**.
 
-The backend runs on SQLite. All primary keys are 36-char UUID strings (`_uuid()`) except
+The backend runs on SQLite by default and also supports PostgreSQL. All primary keys are 36-char UUID strings (`_uuid()`) except
 `app_settings`, which is keyed by its `key` string. Timestamps are UTC (`_utcnow()`).
 
 ## Entity-Relationship Diagram
@@ -305,7 +305,7 @@ path-keyed feature.
 
 | Table | Purpose | Notes |
 | --- | --- | --- |
-| `book_search` | FTS5 virtual table for in-book page search. | Created in [`backend/models/db.py`](../backend/models/db.py) as `fts5(book_id UNINDEXED, page_number UNINDEXED, content, tokenize='porter unicode61')`. Populated by the indexer; `book_id` is a soft reference to `books.id`. |
+| `book_search` | Full-text index for in-book page search. | SQLite uses FTS5; PostgreSQL uses a generated `tsvector` with a GIN index. Populated by the indexer; `book_id` is a soft reference to `books.id`. |
 
 ## Cascades and deletes
 

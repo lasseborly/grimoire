@@ -49,6 +49,14 @@ def create_backup(
     The database is snapshotted under a read lock, so writes are held off for
     the duration — brief for a typical library, but not instant.
     """
+    if db.get_bind().dialect.name != "sqlite":
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                "Application backups currently support SQLite only; use your "
+                "PostgreSQL provider's backup facility."
+            ),
+        )
     try:
         record = backup_service.create_backup(db, trigger="manual")
     except RuntimeError as exc:
@@ -114,6 +122,12 @@ def update_backup_settings(
     config = backup_service.backup_settings(db)
 
     if data.backup_schedule is not None:
+        if data.backup_schedule != "off" and db.get_bind().dialect.name != "sqlite":
+            raise HTTPException(
+                400,
+                "Scheduled application backups support SQLite only; use your "
+                "PostgreSQL provider's backup facility.",
+            )
         if config.schedule_env_locked:
             raise HTTPException(
                 400, "Backup schedule is locked by the BACKUP_SCHEDULE environment variable"

@@ -94,8 +94,8 @@ def requeue_image_only_books(session: Session) -> int:
 
     result = session.execute(
         _sql_text(
-            "UPDATE books SET ocr_pending = 1, ocr_pages_done = 0, ocr_pages_skipped = 0, "
-            "indexed = 0, index_failed = 0, index_error = '' "
+            "UPDATE books SET ocr_pending = TRUE, ocr_pages_done = 0, ocr_pages_skipped = 0, "
+            "indexed = FALSE, index_failed = FALSE, index_error = '' "
             "WHERE index_error = 'image-only'"
         )
     )

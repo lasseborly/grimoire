@@ -99,7 +99,7 @@ def _convert(bind, token_vault) -> None:
         if index not in _indexes(table):
             op.create_index(index, table, [f"{new}_hash"], unique=True)
 
-    if converted:
+    if converted and bind.dialect.name == "sqlite":
         bind.execute(
             text(
                 "UPDATE app_settings SET value = '1' WHERE key = :k"

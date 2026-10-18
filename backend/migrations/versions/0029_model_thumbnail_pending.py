@@ -40,7 +40,7 @@ def upgrade() -> None:
     if "thumbnail_pending" not in {c["name"] for c in insp.get_columns("models_3d")}:
         op.add_column(
             "models_3d",
-            sa.Column("thumbnail_pending", sa.Boolean(), nullable=True, server_default="0"),
+            sa.Column("thumbnail_pending", sa.Boolean(), nullable=True, server_default=sa.false()),
         )
 
 

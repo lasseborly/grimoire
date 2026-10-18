@@ -179,9 +179,8 @@ class ShelfBrowser:
             return _is_blank(Book.product_code)
         if prefix == FILTER_ANY:
             return ~_is_blank(Book.product_code)
-        # LIKE is case-insensitive for ASCII, matching the client's upper-cased
-        # prefix comparison.
-        return Book.product_code.like(f"{_escape_like(prefix)}%", escape="!")
+        # Prefix matching is case-insensitive in both supported database dialects.
+        return Book.product_code.ilike(f"{_escape_like(prefix)}%", escape="!")
 
     def _folders_in_category(self, category: str, sub: str) -> list[str]:
         """The stored folders of ``category`` whose subfolder is exactly ``sub``."""

@@ -31,7 +31,7 @@ never writes to it.
 ### Library
 
 - **Library browser** - Organizes your collection by game system from the folder structure, with card, compact, and list layouts.
-- **Full-text search** - Every page of every PDF is indexed with SQLite FTS5. Also finds books by title, author, or publisher, and maps, tokens, audio, and models by filename, folder, or tag. Narrow with `title:`, `author:`, `tag:` and friends - see [Searching your library](docs/search.md).
+- **Full-text search** - Every page of every PDF is indexed with SQLite FTS5 (or PostgreSQL full-text search when configured). Also finds books by title, author, or publisher, and maps, tokens, audio, and models by filename, folder, or tag. Narrow with `title:`, `author:`, `tag:` and friends - see [Searching your library](docs/search.md).
 - **Sort, filter, and saved presets** - Filter on genre, system family, edition, dice/materials, tags, favourites, and explicit content. Tag filters are boolean groups (`Building` AND `store OR shop`), and named presets save to your account with one default per view.
 - **Shared tags** - One tag catalog across every resource type, with a Tags page to rename, merge, delete, and browse by tag, and per-tag downloads.
 - **Metadata editor** - Rich metadata for systems and books, drawn from curated lists you manage in **Settings → Metadata**. Parent systems group related lines ("Cyberpunk" + "Red" → "Cyberpunk Red").

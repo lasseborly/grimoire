@@ -13,7 +13,7 @@ import logging
 import os
 import zoneinfo
 from sqlalchemy import MetaData, Table, select
-from typing import Any, Iterator, Tuple
+from typing import Any, Iterator, Optional, Tuple
 
 from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import Connection, Engine
@@ -51,13 +51,19 @@ def _normalize_tags_in_db(conn: Connection) -> None:
             continue
         if "tags" not in {c["name"] for c in inspector.get_columns(table)}:
             continue
-        reflected = Table(table, MetaData(), autoload_with=conn)
-        primary_key = next(iter(reflected.primary_key.columns), None)
-        if primary_key is None:
-            continue
-        rows = conn.execute(
-            select(primary_key, reflected.c.tags).where(reflected.c.tags.is_not(None))
-        ).fetchall()
+        if conn.dialect.name == "sqlite":
+            primary_key = None
+            rows = conn.execute(
+                text(f"SELECT rowid, tags FROM {table} WHERE tags IS NOT NULL")
+            ).fetchall()
+        else:
+            reflected = Table(table, MetaData(), autoload_with=conn)
+            primary_key = next(iter(reflected.primary_key.columns), None)
+            if primary_key is None:
+                continue
+            rows = conn.execute(
+                select(primary_key, reflected.c.tags).where(reflected.c.tags.is_not(None))
+            ).fetchall()
         for row_id, raw in rows:
             try:
                 tags = json.loads(raw) if isinstance(raw, str) else raw
@@ -71,11 +77,17 @@ def _normalize_tags_in_db(conn: Connection) -> None:
                         seen.add(lowered)
                         normalized.append(lowered)
                 if normalized != tags:
-                    conn.execute(
-                        reflected.update()
-                        .where(primary_key == row_id)
-                        .values(tags=normalized)
-                    )
+                    if conn.dialect.name == "sqlite":
+                        conn.execute(
+                            text(f"UPDATE {table} SET tags = :tags WHERE rowid = :row_id"),
+                            {"tags": json.dumps(normalized), "row_id": row_id},
+                        )
+                    else:
+                        conn.execute(
+                            reflected.update()
+                            .where(primary_key == row_id)
+                            .values(tags=normalized)
+                        )
             except (ValueError, TypeError) as e:
                 # Row holds tags that aren't valid JSON / not a list-of-strings;
                 # skip it rather than aborting the whole normalization pass, but
@@ -113,7 +125,11 @@ def _migrate_schedule_times_to_local(conn: Connection) -> None:
     if not inspector.has_table("campaign_schedules"):
         return
 
-    schedule_table = Table("campaign_schedules", MetaData(), autoload_with=conn)
+    schedule_table = (
+        Table("campaign_schedules", MetaData(), autoload_with=conn)
+        if conn.dialect.name == "postgresql"
+        else None
+    )
     rows = conn.execute(
         text("SELECT id, definition FROM campaign_schedules WHERE definition IS NOT NULL")
     ).fetchall()
@@ -151,11 +167,7 @@ def _migrate_schedule_times_to_local(conn: Connection) -> None:
                     repaired = f"{local.hour:02d}:{local.minute:02d}"
                     if repaired != stale:
                         definition["time_local"] = repaired
-                        conn.execute(
-                            schedule_table.update()
-                            .where(schedule_table.c.id == row_id)
-                            .values(definition=definition)
-                        )
+                        _update_schedule_definition(conn, schedule_table, row_id, definition)
                         logger.info(
                             "Repaired schedule id=%s: time_local %s -> %s",
                             row_id,
@@ -207,16 +219,28 @@ def _migrate_schedule_times_to_local(conn: Connection) -> None:
                     # broken feed rather than the intent.
                 definition.pop("time_utc", None)
 
-            conn.execute(
-                schedule_table.update()
-                .where(schedule_table.c.id == row_id)
-                .values(definition=definition)
-            )
+            _update_schedule_definition(conn, schedule_table, row_id, definition)
         except (ValueError, TypeError) as e:
             # A row whose definition isn't the expected shape: skip it rather
             # than aborting startup, but log so it is visible.
             logger.warning("Skipping schedule time migration for id=%s: %s", row_id, e)
     conn.commit()
+
+
+def _update_schedule_definition(
+    conn: Connection, schedule_table: Optional[Table], row_id: str, definition: dict
+) -> None:
+    if schedule_table is None:
+        conn.execute(
+            text("UPDATE campaign_schedules SET definition = :d WHERE id = :i"),
+            {"d": json.dumps(definition), "i": row_id},
+        )
+    else:
+        conn.execute(
+            schedule_table.update()
+            .where(schedule_table.c.id == row_id)
+            .values(definition=definition)
+        )
 
 
 def _apply_legacy_migrations(conn: Connection) -> None:
@@ -583,7 +607,7 @@ def _post_migration_setup(engine: Engine) -> None:
             conn.execute(
                 text(
                     "UPDATE campaign_resources SET visibility='public' "
-                    "WHERE visibility='gm' AND shared=1 AND COALESCE(gm_only,0)=0"
+                    "WHERE visibility='gm' AND shared=TRUE AND COALESCE(gm_only,FALSE)=FALSE"
                 )
             )
             conn.commit()
@@ -682,16 +706,18 @@ def init_db(database_url: str) -> Tuple[Engine, sessionmaker[Session]]:
     engine_options: dict[str, Any] = {"echo": False}
     if database_url.startswith("sqlite"):
         engine_options["connect_args"] = {"timeout": 30, "check_same_thread": False}
+    elif database_url.startswith("postgresql"):
+        engine_options["pool_pre_ping"] = True
     engine = create_engine(database_url, **engine_options)
 
     if engine.dialect.name == "sqlite":
         @event.listens_for(engine, "connect")
         def set_sqlite_pragma(dbapi_connection: Any, connection_record: Any) -> None:
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.execute("PRAGMA busy_timeout=30000")
-        cursor.close()
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.execute("PRAGMA busy_timeout=30000")
+            cursor.close()
 
     # Serialize migrations across workers: init_db runs once per process (at
     # config import), so with multiple uvicorn workers several may reach this
@@ -699,20 +725,20 @@ def init_db(database_url: str) -> Tuple[Engine, sessionmaker[Session]]:
     # lock so replicas sharing the database cannot migrate concurrently.
     if engine.dialect.name == "sqlite":
         with _migration_lock(engine.url.database or ""):
-        _apply_migrations(engine)
-        _post_migration_setup(engine)
-        _compact_if_pending(engine)
-    elif engine.dialect.name == "postgresql":
-        with engine.connect() as conn:
-        conn.execute(text("SELECT pg_advisory_lock(7384619201342)"))
-        try:
             _apply_migrations(engine)
             _post_migration_setup(engine)
-        finally:
-            conn.execute(text("SELECT pg_advisory_unlock(7384619201342)"))
+            _compact_if_pending(engine)
+    elif engine.dialect.name == "postgresql":
+        with engine.connect() as conn:
+            conn.execute(text("SELECT pg_advisory_lock(7384619201342)"))
+            try:
+                _apply_migrations(engine)
+                _post_migration_setup(engine)
+            finally:
+                conn.execute(text("SELECT pg_advisory_unlock(7384619201342)"))
     else:
         raise ValueError(
-        f"Unsupported database dialect {engine.dialect.name!r}; use SQLite or PostgreSQL."
+            f"Unsupported database dialect {engine.dialect.name!r}; use SQLite or PostgreSQL."
         )
 
     Session = sessionmaker(bind=engine)

@@ -48,11 +48,11 @@ def upgrade() -> None:
     bind.execute(
         text(
             "UPDATE books SET "
-            "indexed = 0, index_failed = 0, index_error = '', "
-            "ocr_pending = 0, ocr_pages_done = 0, ocr_pages_skipped = 0 "
-            "WHERE indexed = 1 "
-            "AND COALESCE(index_failed, 0) = 0 "
-            "AND COALESCE(ocr_pending, 0) = 0 "
+            "indexed = FALSE, index_failed = FALSE, index_error = '', "
+            "ocr_pending = FALSE, ocr_pages_done = 0, ocr_pages_skipped = 0 "
+            "WHERE indexed = TRUE "
+            "AND COALESCE(index_failed, FALSE) = FALSE "
+            "AND COALESCE(ocr_pending, FALSE) = FALSE "
             "AND COALESCE(index_error, '') NOT IN ('image-only', 'no-text') "
             "AND id NOT IN (SELECT DISTINCT book_id FROM book_search)"
         )

@@ -4,6 +4,7 @@ import os
 import sqlite3
 import tempfile
 import threading
+from urllib.parse import quote
 import zipfile
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -40,7 +41,7 @@ ASSET_DIRS: tuple[tuple[str, str], ...] = (
 _lock = threading.Lock()
 
 
-def snapshot_database(destination: str) -> None:
+def snapshot_database(destination: str, source_path: str | None = None) -> None:
     """Write a consistent, compacted copy of the SQLite database to `destination`.
 
     The database runs in WAL mode, where a plain file copy can capture a torn
@@ -53,7 +54,12 @@ def snapshot_database(destination: str) -> None:
     the gaps inside pages - a token replaced long ago, a deleted note - and a
     backup is exactly the file that leaves the server (issue #583).
     """
-    source = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    source_path = source_path or DB_PATH
+    if source_path == ":memory:":
+        raise RuntimeError("An in-memory SQLite database cannot be backed up.")
+    source = sqlite3.connect(
+        f"file:{quote(os.path.abspath(source_path), safe='/')}?mode=ro", uri=True
+    )
     try:
         source.execute("VACUUM INTO ?", (destination,))
     finally:
@@ -98,6 +104,11 @@ def create_backup(db: Any, trigger: str = "manual") -> BackupRecord:
 
 
 def _create_backup(db: Any, trigger: str) -> BackupRecord:
+    if db.get_bind().dialect.name != "sqlite":
+        raise RuntimeError(
+            "Grimoire backups currently support SQLite only; use your PostgreSQL "
+            "provider's backup facility."
+        )
     config = backup_settings(db)
     os.makedirs(config.directory, exist_ok=True)
 
@@ -125,7 +136,7 @@ def _create_backup(db: Any, trigger: str) -> BackupRecord:
             # the zip: the backup API needs a real path to write to.
             with tempfile.TemporaryDirectory(prefix="grimoire-db-snap-") as snap_dir:
                 snapshot = os.path.join(snap_dir, DB_ARCHIVE_NAME)
-                snapshot_database(snapshot)
+                snapshot_database(snapshot, db.get_bind().url.database)
                 zf.write(snapshot, DB_ARCHIVE_NAME)
 
             for source, arc_root in ASSET_DIRS:

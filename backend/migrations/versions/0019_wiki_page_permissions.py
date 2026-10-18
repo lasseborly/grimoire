@@ -38,7 +38,7 @@ def upgrade() -> None:
     if "can_write" not in cols:
         op.add_column(
             "wiki_page_shares",
-            sa.Column("can_write", sa.Boolean(), nullable=True, server_default="0"),
+            sa.Column("can_write", sa.Boolean(), nullable=True, server_default=sa.false()),
         )
 
     if not insp.has_table("wiki_page_hidden"):

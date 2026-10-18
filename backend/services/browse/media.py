@@ -54,8 +54,8 @@ class MediaBrowse:
 
 
 def rowid(model: Any) -> Any:
-    """Stable unique tie-breaker for the collection's natural sort."""
-    return model.id
+    """The implicit final key on an SQLite index."""
+    return literal_column(f"{model.__tablename__}.rowid")
 
 
 class MediaBrowser:
@@ -206,13 +206,21 @@ class MediaBrowser:
             )
         if sort in ("path", "track"):
             return directed(folder, model.sort_name, model.filename, model.id)
-        tail = directed(model.sort_name, rowid(model))
+        final_key = (
+            model.id if self.db.get_bind().dialect.name == "postgresql" else rowid(model)
+        )
+        tail = directed(model.sort_name, final_key)
         if sort == "added_at":
             # Undated items (added before tracking began) last either way.
             return [nullslast(*directed(model.added_at)), *tail]
         if sort == "title" and hasattr(model, "title"):
             title = func.coalesce(func.nullif(model.title, ""), model.filename)
-            return [*directed(title.collate("NOCASE")), *tail]
+            title_sort = (
+                func.lower(title)
+                if self.db.get_bind().dialect.name == "postgresql"
+                else title.collate("NOCASE")
+            )
+            return [*directed(title_sort), *tail]
         column = {"size": model.file_size, "duration": getattr(model, "duration", None)}.get(sort)
         if column is None:
             return directed(model.sort_name, folder, model.filename, model.id)

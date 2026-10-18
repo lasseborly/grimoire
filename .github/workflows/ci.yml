@@ -145,6 +145,20 @@ jobs:
   backend:
     name: Backend lint + test
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: grimoire_test
+          POSTGRES_USER: grimoire
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U grimoire -d grimoire_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     # See the frontend job: skip the redundant `pull_request` run for the
     # `dev -> main` PR, which is already covered by the `push` run on `dev`.
     if: >-
@@ -194,6 +208,7 @@ jobs:
         env:
           COMMUNITY_ADDONS_PATH: ${{ github.workspace }}/community-add-ons
           REQUIRE_COMMUNITY_ADDONS: "true"
+          POSTGRES_TEST_URL: postgresql+psycopg://grimoire@localhost:5432/grimoire_test
         run: pytest backend/tests/ -v --cov=backend --cov-report=json --cov-report=term
 
       - name: Check per-changed-file coverage

@@ -59,6 +59,18 @@ def backup_dir(tmp_path, monkeypatch):
 
 
 class TestSnapshotDatabase:
+    def test_uses_the_database_path_from_its_engine(self, tmp_path):
+        source_path = tmp_path / "configured.sqlite"
+        with sqlite3.connect(source_path) as source:
+            source.execute("CREATE TABLE marker (value TEXT)")
+            source.execute("INSERT INTO marker VALUES ('custom database')")
+
+        destination = tmp_path / "snapshot.sqlite"
+        backup_service.snapshot_database(str(destination), str(source_path))
+
+        with sqlite3.connect(destination) as snapshot:
+            assert snapshot.execute("SELECT value FROM marker").fetchone()[0] == "custom database"
+
     def test_produces_a_readable_copy(self, tmp_path):
         dest = tmp_path / "snap.db"
         backup_service.snapshot_database(str(dest))
@@ -190,7 +202,7 @@ class TestCreateBackup:
         """A failed run must not leave a half-written archive in the listing."""
         from backend.config import SessionLocal
 
-        def boom(_dest):
+        def boom(_dest, _source_path=None):
             raise OSError("disk full")
 
         monkeypatch.setattr(backup_service._archive, "snapshot_database", boom)

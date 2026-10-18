@@ -122,6 +122,9 @@ def configured_backup_dir(env: Mapping[str, str], data_path: str) -> str | None:
     """
     if env.get("BACKUP_DIR"):
         return os.path.abspath(env["BACKUP_DIR"])
+    database_url = env.get("DATABASE_URL", "")
+    if database_url and not database_url.startswith("sqlite"):
+        return None
     db_path = os.path.join(data_path, "grimoire.db")
     if not os.path.isfile(db_path):
         return None

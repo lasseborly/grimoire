@@ -85,6 +85,14 @@ def apply(db: Session) -> None:
 
     Called on app startup and after backup settings are updated.
     """
+    if db.get_bind().dialect.name != "sqlite":
+        stop()
+        if backup_service_module.backup_settings(db).schedule != "off":
+            logger.warning(
+                "Scheduled application backups are unavailable with PostgreSQL; "
+                "use your PostgreSQL provider's backup facility."
+            )
+        return
     config = backup_service_module.backup_settings(db)
     if config.schedule == "off":
         stop()

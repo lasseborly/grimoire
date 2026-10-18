@@ -99,7 +99,7 @@ def _seed_named(bind, table: str, names: Sequence[str]) -> None:
         bind.execute(
             sa.text(
                 f"INSERT INTO {table} (id, name, is_default, sort_order) "
-                "VALUES (:id, :name, 1, :sort_order)"
+                "VALUES (:id, :name, TRUE, :sort_order)"
             ),
             {"id": str(uuid.uuid4()), "name": name, "sort_order": idx},
         )
@@ -119,7 +119,7 @@ def _seed_lookups() -> None:
         bind.execute(
             sa.text(
                 'INSERT INTO dice_materials (id, name, "group", is_default, sort_order) '
-                "VALUES (:id, :name, :group, 1, :sort_order)"
+                "VALUES (:id, :name, :group, TRUE, :sort_order)"
             ),
             {"id": str(uuid.uuid4()), "name": name, "group": group, "sort_order": idx},
         )

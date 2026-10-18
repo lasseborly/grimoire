@@ -137,7 +137,7 @@ def _seed_lookups() -> None:
         bind.execute(
             sa.text(
                 "INSERT INTO system_families (id, name, is_default, sort_order) "
-                "VALUES (:id, :name, 1, :sort_order)"
+                "VALUES (:id, :name, TRUE, :sort_order)"
             ),
             {"id": str(uuid.uuid4()), "name": fam, "sort_order": idx},
         )
@@ -154,7 +154,7 @@ def _ensure_genre(bind, existing: set, name: str, parent_id, sort_order: int) ->
     bind.execute(
         sa.text(
             "INSERT INTO genres (id, name, parent_id, is_default, sort_order) "
-            "VALUES (:id, :name, :parent_id, 1, :sort_order)"
+            "VALUES (:id, :name, :parent_id, TRUE, :sort_order)"
         ),
         {"id": new_id, "name": name, "parent_id": parent_id, "sort_order": sort_order},
     )

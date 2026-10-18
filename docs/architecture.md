@@ -13,7 +13,8 @@ update the matching section here.
 - **Frontend** - React 18 + Vite 6 SPA, React Router v6, React Context (no Redux/Zustand),
   i18next (see [`frontend/src/locales/`](../frontend/src/locales) for available locales),
   Vitest + React Testing Library.
-- **Backend** - FastAPI (async) + SQLAlchemy 2.0, SQLite with FTS5 full-text search,
+- **Backend** - FastAPI (async) + SQLAlchemy 2.0, SQLite by default or PostgreSQL for hosted deployments,
+  with FTS5 or PostgreSQL full-text search respectively,
   PyMuPDF (`fitz`) for PDF→WebP rendering, PyJWT auth.
 - **Optional** - Valkey/Redis for in-memory page-image caching (falls back to disk).
 
@@ -29,10 +30,10 @@ backend on port 9481.
 | --- | --- |
 | [`backend/main.py`](../backend/main.py) | FastAPI app construction, router registration, the `lifespan` startup hook (library scan, user seeding, wiki migrations, scheduler), and the SPA catch-all `serve_frontend`. |
 | [`backend/config.py`](../backend/config.py) | Settings parsed from the environment, `DATA_PATH`/`LIBRARY_PATH` and cache dirs, logging setup (incl. the in-memory ring buffer for `/api/logs`), and `startup()`, which creates the data dirs, opens and migrates the database (`engine`, `SessionLocal`, the `get_db` dependency) and connects the optional Valkey client (`valkey_client()`). Importing it does no file, database or network I/O - see [Startup and migrations](#startup-and-migrations). |
-| [`backend/models/`](../backend/models/) | ORM models split by domain (`library.py`, `media.py`, `users.py`, `campaigns.py`, `settings.py`); `db.py` holds `init_db`, runtime migrations, and FTS5 setup. See [`docs/data-model.md`](data-model.md). |
+| [`backend/models/`](../backend/models/) | ORM models split by domain (`library.py`, `media.py`, `users.py`, `campaigns.py`, `settings.py`); `db.py` holds `init_db`, runtime migrations, and database-specific full-text setup. See [`docs/data-model.md`](data-model.md). |
 | [`backend/auth.py`](../backend/auth.py) | JWT creation/validation, password hashing (`bcrypt_sha256`), the `get_current_user` dependency, and the role-guard dependencies (`require_admin`, `require_gm_or_admin`, `require_not_guest`). |
 | [`backend/api_keys.py`](../backend/api_keys.py) | Personal API keys: the tag → permission table, the read-only / excluded route markers, the role-derived levels each user is offered, key hashing, and the per-request check `get_current_user` runs when an `X-API-Key` is presented. See [API keys](api.md#api-keys). |
-| [`backend/indexer/`](../backend/indexer/) | Library scanning, PDF FTS5 indexing, thumbnail generation, and OPF/metadata parsing. PDF text extraction runs in an isolated subprocess (see below). |
+| [`backend/indexer/`](../backend/indexer/) | Library scanning, PDF full-text indexing, thumbnail generation, and OPF/metadata parsing. PDF text extraction runs in an isolated subprocess (see below). |
 | [`backend/pdf_worker.py`](../backend/pdf_worker.py) | Standalone entry point for the spawned PDF text-extraction process. Imports only `fitz`/OCR libs and `backend.config` for its settings, which opens no DB and runs no migrations, so a throwaway extraction child stays light. |
 | [`backend/addons/`](../backend/addons/) | Community add-ons: installable metadata scrapers. Manifest validation, on-disk discovery and install state, integrity-verified installation, HTTP fetching with a response cache, the declarative interpreter (records → ranked search → mapped fields), the isolated script runner, and the fetched-vs-current diff. See [`docs/addons.md`](addons.md). |
 | [`backend/mcp_server/`](../backend/mcp_server/) | The MCP server for AI assistants, behind `MCP_ENABLED`. `server.py` (the official `mcp` SDK server: it owns JSON-RPC, version negotiation and the transport, and calls Grimoire's tools, resources and prompts), `tools/` (the tools, grouped by area, each calling the REST handler for the same job), `resources.py` (`grimoire://` URIs), `prompts.py` (prompts and argument completion). The HTTP transport is `routers/mcp`. See [`docs/mcp.md`](mcp.md). |
@@ -79,7 +80,7 @@ sequenceDiagram
     participant FA as FastAPI (/api)
     participant Dep as get_current_user
     participant H as handler (core.py)
-    participant DB as SQLAlchemy / SQLite
+    participant DB as SQLAlchemy / SQLite or PostgreSQL
 
     UI->>API: campaigns.get(id)
     API->>FA: fetch('/api/campaigns/:id')<br/>Authorization: Bearer <JWT>
@@ -357,13 +358,11 @@ Schema changes are managed by **Alembic** (revisions in
   exactly to the baseline, then the DB is `stamp`ed at head - the baseline migration is
   **not** re-run (which would try to recreate existing tables). This keeps upgrades from
   any prior version transparent, with no manual action.
-- **Concurrency** - `init_db` runs once per worker process; a blocking file lock
-  (`<db>.migrate.lock`) serializes the migration so, with multiple uvicorn workers, the
-  first migrates and the rest wait and then find the DB already at head.
+- **Concurrency** - `init_db` runs once per worker process; a SQLite lock file or
+  PostgreSQL advisory lock serializes migrations across workers and replicas.
 - After migrations, idempotent data fixups run on every startup (tag normalization,
-  resource-visibility backfill from the legacy `shared`/`gm_only` flags) and the FTS5
-  `book_search` virtual table is created (it's not an ORM table, so Alembic doesn't manage
-  it).
+  resource-visibility backfill from the legacy `shared`/`gm_only` flags) and the
+  dialect-specific `book_search` full-text index is created.
 
 SQLite's limited `ALTER TABLE` support means table rebuilds go through Alembic's **batch
 mode** (`render_as_batch=True`, set in [`env.py`](../backend/migrations/env.py)).
