@@ -82,6 +82,15 @@ class TestRun:
             scheduler._run("daily", 2, 0, None, rescan, None)
         rescan.assert_called_once_with()
 
+    def test_skips_cleanup_when_rescan_did_not_start(self):
+        rescan = MagicMock(return_value=False)
+        cleanup = MagicMock()
+        with patch.object(scheduler, "_stop_event") as ev:
+            ev.wait.side_effect = [False, True]
+            scheduler._run("daily", 2, 0, None, rescan, cleanup)
+        rescan.assert_called_once_with()
+        cleanup.assert_not_called()
+
     def test_stops_immediately_when_signalled(self):
         rescan = MagicMock()
         with patch.object(scheduler, "_stop_event") as ev:

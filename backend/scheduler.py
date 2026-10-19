@@ -46,7 +46,7 @@ def _run(
     hour: int,
     minute: int,
     weekday: Optional[int],
-    rescan_fn: Callable[[], None],
+    rescan_fn: Callable[[], bool | None],
     cleanup_fn: Optional[Callable[[], None]] = None,
 ) -> None:
     while True:
@@ -72,13 +72,16 @@ def _run(
 
 
 def _run_scheduled(
-    rescan_fn: Callable[[], None], cleanup_fn: Optional[Callable[[], None]]
+    rescan_fn: Callable[[], bool | None], cleanup_fn: Optional[Callable[[], None]]
 ) -> None:
     logger.info("Scheduled rescan starting…")
     try:
-        rescan_fn()
+        rescan_started = rescan_fn()
     except Exception as e:
         logger.error(f"Scheduled rescan error: {e}")
+    else:
+        if rescan_started is False:
+            return
 
     if cleanup_fn is not None:
         logger.info("Scheduled database cleanup starting…")
@@ -93,7 +96,7 @@ def start(
     hour: int,
     minute: int,
     weekday: int,
-    rescan_fn: Callable[[], None],
+    rescan_fn: Callable[[], bool | None],
     cleanup_fn: Optional[Callable[[], None]] = None,
 ) -> None:
     """Start (or restart) the background rescan thread."""

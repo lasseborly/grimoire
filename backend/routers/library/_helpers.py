@@ -545,7 +545,7 @@ def rescan_single_book(book_id: str, refresh_file: bool = True) -> None:
         heartbeat.set()
 
 
-def _run_rescan_sync(scope_path: str | None = None, metadata_mode: str = "new") -> None:
+def _run_rescan_sync(scope_path: str | None = None, metadata_mode: str = "new") -> bool:
     """Library rescan — scans disk and indexes PDFs.
 
     Guards against concurrent calls: if a rescan is already running this call
@@ -558,7 +558,7 @@ def _run_rescan_sync(scope_path: str | None = None, metadata_mode: str = "new") 
     """
     if scan_in_progress():
         logger.info("A library scan is already running - ignoring this request.")
-        return
+        return False
     if _get_status()["running"]:
         # The previous scan's process died before it could clear its status
         # (issue #524). Nothing is competing with this one, so start anyway.
@@ -642,7 +642,7 @@ def _run_rescan_sync(scope_path: str | None = None, metadata_mode: str = "new") 
 
             if is_stop_requested():
                 logger.info("Stopped after scanning files - skipping the rest.")
-                return
+                return True
 
             # --- Phase 2: PDF indexing ---
             to_index = (
@@ -713,12 +713,13 @@ def _run_rescan_sync(scope_path: str | None = None, metadata_mode: str = "new") 
         sweep_page_cache()
         _set_status({"running": False, "phase": None})
         heartbeat.set()
+    return True
 
 
-def run_rescan_sync(scope_path: str | None = None, metadata_mode: str = "new") -> None:
+def run_rescan_sync(scope_path: str | None = None, metadata_mode: str = "new") -> bool:
     """Run a rescan only when this process can claim the shared database lock."""
     with postgres_advisory_lock(config.init_database(), 7384619201343) as acquired:
         if not acquired:
             logger.info("A library scan is already running on another replica.")
-            return
-        _run_rescan_sync(scope_path=scope_path, metadata_mode=metadata_mode)
+            return False
+        return _run_rescan_sync(scope_path=scope_path, metadata_mode=metadata_mode)
