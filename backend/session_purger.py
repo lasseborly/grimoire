@@ -4,12 +4,9 @@ Every login writes an ``auth_sessions`` row, and revoking or expiring one only
 marks it — nothing removes it. Without this the table grows for the life of the
 install. Runs once at startup, then daily.
 
-Only one worker purges. The work is idempotent, so a double run would be
-harmless, but there is no reason for every worker to issue the same DELETE, and
-concurrent writers on SQLite serialise anyway. The lock is held for the life of
-the process rather than per-pass: whichever worker wins at startup keeps the
-job, and if that worker dies its file lock is released by the OS so a survivor
-picks it up on the next restart.
+Only one worker purges at a time. PostgreSQL replicas coordinate each pass with
+an advisory lock, allowing a surviving replica to take over after a failure.
+SQLite uses a process-lifetime file lock because its work directory is local.
 """
 
 import datetime
@@ -18,7 +15,9 @@ import os
 import threading
 from typing import Optional, TextIO
 
+from . import config
 from .config import logger
+from .db_lock import postgres_advisory_lock
 
 # Sessions stay in the table this long after they die, so a refresh token
 # replayed shortly after logout is still recognisable as a reuse rather than
@@ -26,6 +25,7 @@ from .config import logger
 RETAIN_DAYS = 7
 
 _PURGE_INTERVAL_SECONDS = 24 * 60 * 60
+_SESSION_PURGER_LOCK = 7384619201344
 
 _thread: Optional[threading.Thread] = None
 _stop_event = threading.Event()
@@ -68,11 +68,15 @@ def _purge_once() -> int:
     from .config import SessionLocal
     from .sessions import purge_expired_sessions
 
-    db = SessionLocal()
-    try:
-        return purge_expired_sessions(db, retain_days=RETAIN_DAYS)
-    finally:
-        db.close()
+    with postgres_advisory_lock(config.init_database(), _SESSION_PURGER_LOCK) as acquired:
+        if not acquired:
+            logger.debug("Session purge is running on another replica.")
+            return 0
+        db = SessionLocal()
+        try:
+            return purge_expired_sessions(db, retain_days=RETAIN_DAYS)
+        finally:
+            db.close()
 
 
 def _run() -> None:
@@ -94,10 +98,10 @@ def _run() -> None:
 
 
 def start(data_path: str) -> None:
-    """Start the purge thread in whichever worker claims the lock first."""
+    """Start purging, using PostgreSQL coordination or a local SQLite file lock."""
     global _thread
 
-    if not _acquire_lock(data_path):
+    if not config.DATABASE_URL.startswith("postgres") and not _acquire_lock(data_path):
         logger.debug("Session purge running in another worker, skipping.")
         return
 

@@ -8,10 +8,13 @@ import threading
 import datetime
 from typing import Optional
 
+from . import config
 from .config import logger
+from .db_lock import postgres_advisory_lock
 
 _thread: Optional[threading.Thread] = None
 _stop_event = threading.Event()
+_SESSION_CREATOR_LOCK = 7384619201345
 
 
 def _create_upcoming_sessions(db) -> None:
@@ -47,6 +50,20 @@ def _create_upcoming_sessions(db) -> None:
     db.commit()
 
 
+def _create_once() -> None:
+    from .config import SessionLocal
+
+    with postgres_advisory_lock(config.init_database(), _SESSION_CREATOR_LOCK) as acquired:
+        if not acquired:
+            logger.debug("Session auto-creator is running on another replica.")
+            return
+        db = SessionLocal()
+        try:
+            _create_upcoming_sessions(db)
+        finally:
+            db.close()
+
+
 def _seconds_until_utc_midnight() -> float:
     now = datetime.datetime.utcnow()
     tomorrow = (now + datetime.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -54,29 +71,21 @@ def _seconds_until_utc_midnight() -> float:
 
 
 def _run() -> None:
-    from .config import SessionLocal
-
     # Run once immediately on startup to catch anything missed
-    db = SessionLocal()
     try:
-        _create_upcoming_sessions(db)
+        _create_once()
     except Exception as e:
         logger.error(f"Session auto-creator startup error: {e}")
-    finally:
-        db.close()
 
     while not _stop_event.is_set():
         secs = _seconds_until_utc_midnight()
         if _stop_event.wait(secs):
             break
 
-        db = SessionLocal()
         try:
-            _create_upcoming_sessions(db)
+            _create_once()
         except Exception as e:
             logger.error(f"Session auto-creator error: {e}")
-        finally:
-            db.close()
 
 
 def start() -> None:

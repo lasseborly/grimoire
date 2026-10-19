@@ -58,6 +58,12 @@ variable is set, its value wins and the matching field is shown read-only in Set
 | `REFRESH_TOKEN_EXPIRE_DAYS` | `30` | Optional. How long a session survives without use before you must log in again. The clock resets on every refresh, so an actively-used session stays alive indefinitely. |
 | `TRUST_FORWARDED_FOR` | `true` | Optional. When `true`, the rate limiter keys on the left-most `X-Forwarded-For` address so each client gets its own bucket behind a reverse proxy. Set to `false` only if Grimoire is exposed directly (no trusted proxy), so a spoofed header can't sidestep the limit. |
 
+For PostgreSQL HA deployments, point every replica at the same database. PostgreSQL
+advisory locks coordinate migrations, library rescans, and scheduled database jobs
+across replicas. Each worker process has its own SQLAlchemy connection pool (up to
+15 connections with the current defaults), so size PostgreSQL's connection limit for
+the maximum replica count multiplied by `WORKERS`.
+
 ## Volumes
 
 ```yaml

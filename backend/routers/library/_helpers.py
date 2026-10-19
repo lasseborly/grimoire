@@ -7,6 +7,7 @@ from typing import Optional
 
 from ... import config
 from ...config import SessionLocal, LIBRARY_PATH, DATA_PATH, logger, valkey_client, valkey_errors
+from ...db_lock import postgres_advisory_lock
 from ...models import Book, Model3D
 from ...indexer import scan_library, index_book_text, ocr_book, reindex_single_book
 from ...indexer.formats import INDEXABLE_MIMES
@@ -544,7 +545,7 @@ def rescan_single_book(book_id: str, refresh_file: bool = True) -> None:
         heartbeat.set()
 
 
-def run_rescan_sync(scope_path: str | None = None, metadata_mode: str = "new") -> None:
+def _run_rescan_sync(scope_path: str | None = None, metadata_mode: str = "new") -> None:
     """Library rescan — scans disk and indexes PDFs.
 
     Guards against concurrent calls: if a rescan is already running this call
@@ -712,3 +713,12 @@ def run_rescan_sync(scope_path: str | None = None, metadata_mode: str = "new") -
         sweep_page_cache()
         _set_status({"running": False, "phase": None})
         heartbeat.set()
+
+
+def run_rescan_sync(scope_path: str | None = None, metadata_mode: str = "new") -> None:
+    """Run a rescan only when this process can claim the shared database lock."""
+    with postgres_advisory_lock(config.init_database(), 7384619201343) as acquired:
+        if not acquired:
+            logger.info("A library scan is already running on another replica.")
+            return
+        _run_rescan_sync(scope_path=scope_path, metadata_mode=metadata_mode)

@@ -179,10 +179,10 @@ async def lifespan(app: FastAPI):
     # running forever: Stop just sets a flag for a thread that no longer exists,
     # and every later scan is refused as "already running" (issue #304).
     #
-    # Before the file lock, not inside do_scan(): the lock-losing worker returns
-    # early, and it is just as able to serve /duplicates/scan-status as the one
-    # that holds it. Without Valkey the status is per-process, so each worker has
-    # its own copy to reset; with Valkey they share one key and this is idempotent.
+    # Before the file lock, not inside do_scan(): a lock-losing worker is just as
+    # able to serve /duplicates/scan-status as the one that holds it. Without
+    # Valkey the status is per-process, so each worker has its own copy to reset;
+    # with Valkey they share one key and this is idempotent.
     # Only a *stale* one is cleared, never a live scan. With Valkey the status is
     # shared across workers, so an unconditional reset here would let a worker
     # starting late wipe a scan another worker is still running.
@@ -195,26 +195,28 @@ async def lifespan(app: FastAPI):
     # Only one worker should run the startup scan; others skip via file lock.
     lock_path = os.path.join(DATA_PATH, ".scan.lock")
     lock_file = open(lock_path, "w")
+    owns_startup_scan = True
     try:
         fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         logger.info("Startup scan already running in another worker, skipping.")
         lock_file.close()
-        yield
-        return
+        owns_startup_scan = False
 
     # Drop cached renders from a previous run. Page keys carry no content hash,
     # so a file replaced while the server was down would otherwise be served
     # stale indefinitely — the responses are marked immutable. Only this worker
     # holds the lock, so the purge runs once per startup rather than per worker.
-    purge_valkey_page_cache()
+    if owns_startup_scan:
+        purge_valkey_page_cache()
 
     # The on-disk render cache has no TTL and grows with every page ever viewed;
     # superseded renders (from replaced files) are unreachable but still occupy
     # space, so trim it back under its cap here rather than on any request path.
-    from .services.content_cache import sweep_page_cache
+    if owns_startup_scan:
+        from .services.content_cache import sweep_page_cache
 
-    sweep_page_cache()
+        sweep_page_cache()
 
     def do_scan():
         from .routers.library._helpers import clear_stop, _set_status, _DEFAULT_STATUS
@@ -250,10 +252,12 @@ async def lifespan(app: FastAPI):
             finally:
                 db.close()
         finally:
-            fcntl.flock(lock_file, fcntl.LOCK_UN)
-            lock_file.close()
+            if owns_startup_scan:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
+                lock_file.close()
 
-    threading.Thread(target=do_scan, daemon=True).start()
+    if owns_startup_scan:
+        threading.Thread(target=do_scan, daemon=True).start()
 
     db = SessionLocal()
     try:
@@ -284,7 +288,8 @@ async def lifespan(app: FastAPI):
             db.close()
         session_creator.start()
         # Trims dead auth_sessions rows so the table stays bounded (issue #157).
-        # Self-limits to one worker via its own lock.
+        # Coordinates PostgreSQL passes with an advisory lock; SQLite uses the
+        # local-file election in session_purger.start().
         session_purger.start(DATA_PATH)
 
     yield

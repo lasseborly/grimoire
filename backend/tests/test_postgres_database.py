@@ -7,6 +7,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
 from backend.models.db import init_db
+from backend.db_lock import postgres_advisory_lock
 from backend.routers.content._helpers import search_entry_ids
 from backend.routers.search._helpers import full_text_search_parts
 
@@ -23,6 +24,14 @@ def test_postgres_migrations_and_full_text_search():
     test_url = base_url.update_query_dict({"options": f"-csearch_path={schema}"})
     try:
         app_engine, session_factory = init_db(test_url.render_as_string(hide_password=False))
+        lock_key = 7384619201346
+        with postgres_advisory_lock(app_engine, lock_key) as acquired:
+            assert acquired
+            with postgres_advisory_lock(app_engine, lock_key) as second_acquired:
+                assert not second_acquired
+        with postgres_advisory_lock(app_engine, lock_key) as reacquired:
+            assert reacquired
+
         with session_factory() as db:
             db.execute(
                 text(

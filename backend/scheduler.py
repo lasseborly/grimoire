@@ -13,10 +13,13 @@ from typing import Callable, Optional
 
 from sqlalchemy.orm import Session
 
+from . import config
 from .config import logger
+from .db_lock import postgres_advisory_lock
 
 _thread: Optional[threading.Thread] = None
 _stop_event = threading.Event()
+_SCHEDULE_LOCK = 7384619201347
 
 
 def _seconds_until_next(hour: int, minute: int, weekday: Optional[int]) -> float:
@@ -55,18 +58,34 @@ def _run(
         if _stop_event.wait(secs):
             break  # stop() was called
 
-        logger.info("Scheduled rescan starting…")
-        try:
-            rescan_fn()
-        except Exception as e:
-            logger.error(f"Scheduled rescan error: {e}")
-
-        if cleanup_fn is not None:
-            logger.info("Scheduled database cleanup starting…")
+        if config.DATABASE_URL.startswith("postgres"):
             try:
-                cleanup_fn()
+                with postgres_advisory_lock(config.init_database(), _SCHEDULE_LOCK) as acquired:
+                    if not acquired:
+                        logger.info("Scheduled rescan is running on another replica.")
+                        continue
+                    _run_scheduled(rescan_fn, cleanup_fn)
             except Exception as e:
-                logger.error(f"Scheduled database cleanup error: {e}")
+                logger.error(f"Scheduled rescan error: {e}")
+        else:
+            _run_scheduled(rescan_fn, cleanup_fn)
+
+
+def _run_scheduled(
+    rescan_fn: Callable[[], None], cleanup_fn: Optional[Callable[[], None]]
+) -> None:
+    logger.info("Scheduled rescan starting…")
+    try:
+        rescan_fn()
+    except Exception as e:
+        logger.error(f"Scheduled rescan error: {e}")
+
+    if cleanup_fn is not None:
+        logger.info("Scheduled database cleanup starting…")
+        try:
+            cleanup_fn()
+        except Exception as e:
+            logger.error(f"Scheduled database cleanup error: {e}")
 
 
 def start(
